@@ -1,0 +1,82 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# 密钥与本地配置（勿打进镜像）
+.env
+.env.*
+!.env.example
+token.txt
+token*.txt
+
+# Python 缓存与构建产物
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+wheels/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# 虚拟环境与锁文件（镜像内不安装依赖）
+.venv/
+venv/
+env/
+uv.lock
+.python-version
+
+# 测试与覆盖率
+tests/
+test/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# 类型检查 / 格式化缓存
+.mypy_cache/
+.ruff_cache/
+.pytype/
+
+# 文档与日志（运行时由挂载或 env 提供）
+docs/
+log/
+logs/
+*.log
+
+# 本地开发 / IDE
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+*~
+
+# 系统杂项
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker 自身（构建上下文不需要）
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# 打包与杂项
+*.spec
+main.py
+LICENSE
+
+# 项目外或临时目录
+agent-transcripts/
+mcps/
+terminals/
+*.zip
