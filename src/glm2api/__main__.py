@@ -21,3 +21,7 @@ def main() -> int:
         print(f"[glm2api] 未处理异常: {exc}")
         print(traceback.format_exc())
         return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
