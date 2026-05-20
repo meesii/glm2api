@@ -3,16 +3,13 @@ from __future__ import annotations
 import base64
 import codecs
 import gzip
-import http.client
 import json
 import mimetypes
 import re
 import threading
 import time
 import uuid
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from email.generator import _make_boundary # type: ignore
 from io import BufferedReader, BytesIO
@@ -22,6 +19,7 @@ from typing import Callable
 from ..config import AppConfig
 from ..logging_utils import debug_dump
 from .glm_auth import GLMAccessTokenManager, build_sign
+from .http_client import HTTPError, read_error_body, urlopen
 from .translator import GLMEventAccumulator, convert_messages, extract_recent_user_url, filter_tools, resolve_chat_mode, resolve_upstream_model
 
 
@@ -296,7 +294,7 @@ class GLMWebClient:
         try:
             def send_request(account_index: int, access_token: str):
                 timestamp, nonce, sign = build_sign()
-                request = urllib.request.Request(
+                return urlopen(
                     self.config.delete_conversation_url,
                     method="POST",
                     data=body,
@@ -310,8 +308,9 @@ class GLMWebClient:
                         "X-Sign": sign,
                         "X-Timestamp": timestamp,
                     },
+                    timeout=self.config.request_timeout,
+                    impersonate=self.config.glm_impersonate,
                 )
-                return urllib.request.urlopen(request, timeout=self.config.request_timeout)
 
             with self._call_with_account_failover("delete_conversation", send_request) as response: # type: ignore
                 payload = self.auth.read_json_response(response)
@@ -396,30 +395,33 @@ class GLMWebClient:
             for attempt in range(self.config.glm_busy_max_retries + 1):
                 try:
                     timestamp, nonce, sign = build_sign()
-                    request = urllib.request.Request(
-                        self.config.chat_stream_url,
-                        data=request_body,
-                        method="POST",
-                        headers={
-                            **self.auth.get_browser_headers(),
-                            "Authorization": f"Bearer {access_token}",
-                            "X-Device-Id": uuid.uuid4().hex,
-                            "X-Nonce": nonce,
-                            "X-Request-Id": uuid.uuid4().hex,
-                            "X-Sign": sign,
-                            "X-Timestamp": timestamp,
-                        },
-                    )
+                    headers = {
+                        **self.auth.get_browser_headers(),
+                        "Authorization": f"Bearer {access_token}",
+                        "X-Device-Id": uuid.uuid4().hex,
+                        "X-Nonce": nonce,
+                        "X-Request-Id": uuid.uuid4().hex,
+                        "X-Sign": sign,
+                        "X-Timestamp": timestamp,
+                    }
                     debug_dump(
                         self.logger,
                         self.config.debug_dump_all,
                         f"转发到 GLM 的 chat 请求头 account={account_index} attempt={attempt + 1}",
-                        dict(request.header_items()),
+                        headers,
                     )
                     return self._prepare_chat_response(
-                        urllib.request.urlopen(request, timeout=self.config.request_timeout)
+                        urlopen(
+                            self.config.chat_stream_url,
+                            method="POST",
+                            data=request_body,
+                            headers=headers,
+                            timeout=self.config.request_timeout,
+                            stream=True,
+                            impersonate=self.config.glm_impersonate,
+                        )
                     )
-                except urllib.error.HTTPError as exc:
+                except HTTPError as exc:
                     error_payload = self._read_error_payload(exc)
                     if self._should_retry_busy_error(exc.code, error_payload) and attempt < self.config.glm_busy_max_retries:
                         wait_seconds = self.config.glm_busy_retry_interval
@@ -499,29 +501,34 @@ class GLMWebClient:
 
         def send_request(account_index: int, access_token: str):
             timestamp, nonce, sign = build_sign()
-            request = urllib.request.Request(
-                self.config.chat_stream_url,
-                data=request_body,
-                method="POST",
-                headers={
-                    **self.auth.get_browser_headers(),
-                    "Authorization": f"Bearer {access_token}",
-                    "X-Device-Id": uuid.uuid4().hex,
-                    "X-Nonce": nonce,
-                    "X-Request-Id": uuid.uuid4().hex,
-                    "X-Sign": sign,
-                    "X-Timestamp": timestamp,
-                },
-            )
+            headers = {
+                **self.auth.get_browser_headers(),
+                "Authorization": f"Bearer {access_token}",
+                "X-Device-Id": uuid.uuid4().hex,
+                "X-Nonce": nonce,
+                "X-Request-Id": uuid.uuid4().hex,
+                "X-Sign": sign,
+                "X-Timestamp": timestamp,
+            }
             debug_dump(
                 self.logger,
                 self.config.debug_dump_all,
                 f"转发到 GLM 的 image 请求头 account={account_index}",
-                dict(request.header_items()),
+                headers,
             )
             try:
-                return self._prepare_chat_response(urllib.request.urlopen(request, timeout=self.config.request_timeout))
-            except urllib.error.HTTPError as exc:
+                return self._prepare_chat_response(
+                    urlopen(
+                        self.config.chat_stream_url,
+                        method="POST",
+                        data=request_body,
+                        headers=headers,
+                        timeout=self.config.request_timeout,
+                        stream=True,
+                        impersonate=self.config.glm_impersonate,
+                    )
+                )
+            except HTTPError as exc:
                 error_payload = self._read_error_payload(exc)
                 message = self._build_error_message(exc.code, error_payload)
                 raise UpstreamAPIError(status_code=exc.code, message=message, payload=error_payload) from exc
@@ -643,7 +650,7 @@ class GLMWebClient:
 
     def _download_image_as_base64(self, image_url: str) -> str:
         try:
-            with urllib.request.urlopen(image_url, timeout=self.config.request_timeout) as response:
+            with urlopen(image_url, timeout=self.config.request_timeout, impersonate=self.config.glm_impersonate) as response:
                 image_bytes = response.read()
             return base64.b64encode(image_bytes).decode("ascii")
         except Exception as exc:
@@ -670,13 +677,7 @@ class GLMWebClient:
                 return None
 
         while True:
-            stop_after_chunk = False
-            try:
-                raw_chunk = response.read(4096)
-            except http.client.IncompleteRead as exc:
-                raw_chunk = exc.partial or b""
-                stop_after_chunk = True
-                self.logger.warning("上游 SSE 连接提前断开，按已接收内容收尾 bytes=%s", len(raw_chunk))
+            raw_chunk = response.read(4096)
             if not raw_chunk:
                 break
 
@@ -689,9 +690,6 @@ class GLMWebClient:
                     return
                 if event is not None:
                     yield event
-
-            if stop_after_chunk:
-                break
 
         remaining = decoder.decode(b"", True)
         if remaining:
@@ -741,27 +739,22 @@ class GLMWebClient:
 
             def send_request(account_index: int, access_token: str):
                 timestamp, nonce, sign = build_sign()
-                request = urllib.request.Request(
-                    upload_url,
-                    method="POST",
-                    data=body,
-                    headers={
-                        **self.auth.get_browser_headers(),
-                        "Authorization": f"Bearer {access_token}",
-                        "Content-Type": f"multipart/form-data; boundary={boundary}",
-                        "Referer": "https://chatglm.cn/",
-                        "X-Device-Id": uuid.uuid4().hex,
-                        "X-Nonce": nonce,
-                        "X-Request-Id": uuid.uuid4().hex,
-                        "X-Sign": sign,
-                        "X-Timestamp": timestamp,
-                    },
-                )
+                headers = {
+                    **self.auth.get_browser_headers(),
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": f"multipart/form-data; boundary={boundary}",
+                    "Referer": "https://chatglm.cn/",
+                    "X-Device-Id": uuid.uuid4().hex,
+                    "X-Nonce": nonce,
+                    "X-Request-Id": uuid.uuid4().hex,
+                    "X-Sign": sign,
+                    "X-Timestamp": timestamp,
+                }
                 debug_dump(
                     self.logger,
                     self.config.debug_dump_all,
                     f"转发到 GLM 的 file_upload 请求头 account={account_index}",
-                    dict(request.header_items()),
+                    headers,
                 )
                 debug_dump(
                     self.logger,
@@ -769,7 +762,14 @@ class GLMWebClient:
                     f"转发到 GLM 的 file_upload 原始请求体 account={account_index}",
                     body,
                 )
-                return urllib.request.urlopen(request, timeout=self.config.request_timeout)
+                return urlopen(
+                    upload_url,
+                    method="POST",
+                    data=body,
+                    headers=headers,
+                    timeout=self.config.request_timeout,
+                    impersonate=self.config.glm_impersonate,
+                )
 
             with self._call_with_account_failover("file_upload", send_request) as response: # type: ignore
                 result = self.auth.read_json_response(response).get("result", {})
@@ -795,7 +795,7 @@ class GLMWebClient:
 
         parsed = urllib.parse.urlparse(file_url)
         filename = parsed.path.rsplit("/", 1)[-1] or f"upload-{uuid.uuid4().hex}.bin"
-        with urllib.request.urlopen(file_url, timeout=self.config.request_timeout) as response:
+        with urlopen(file_url, timeout=self.config.request_timeout, impersonate=self.config.glm_impersonate) as response:
             payload = response.read(FILE_SIZE_LIMIT + 1)
             if len(payload) > FILE_SIZE_LIMIT:
                 raise ValueError("文件超过 100MB，拒绝上传。")
@@ -818,24 +818,8 @@ class GLMWebClient:
             return BufferedReader(gzip.GzipFile(fileobj=response))
         return response
 
-    def _read_error_payload(self, error: urllib.error.HTTPError) -> dict[str, object]:
-        try:
-            raw_body = error.read()
-            content_encoding = error.headers.get("Content-Encoding", "").lower()
-
-            if content_encoding == "gzip":
-                raw_body = gzip.decompress(raw_body)
-
-            text = raw_body.decode("utf-8", errors="ignore")
-        except Exception as exc:
-            return {"message": f"读取上游错误响应失败: {exc}"}
-        try:
-            payload = json.loads(text)
-            if isinstance(payload, dict):
-                return payload
-        except json.JSONDecodeError:
-            pass
-        return {"message": text}
+    def _read_error_payload(self, error: HTTPError) -> dict[str, object]:
+        return read_error_body(error)
 
     def _should_retry_busy_error(self, status_code: int, payload: dict[str, object]) -> bool:
         if status_code != 429:

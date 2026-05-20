@@ -7,13 +7,12 @@ import random
 import threading
 import time
 import uuid
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from logging import Logger
 
 from ..config import AppConfig, GUEST_REFRESH_TOKEN_MARKER
 from ..logging_utils import debug_dump
+from .http_client import HTTPError, RequestError, urlopen
 
 
 SIGN_SECRET = "8a1317a7468aa3ad86e997d08f3f31cb"
@@ -170,23 +169,25 @@ class GLMAccessTokenManager:
         if account.is_guest or not account.refresh_token:
             return self._fetch_guest_access_token(account_index)
         timestamp, nonce, sign = build_sign()
-        request = urllib.request.Request(
-            self.config.refresh_url,
-            data=b"{}",
-            method="POST",
-            headers={
-                **self.get_browser_headers(),
-                "Authorization": f"Bearer {account.refresh_token}",
-                "X-Device-Id": uuid.uuid4().hex,
-                "X-Nonce": nonce,
-                "X-Request-Id": uuid.uuid4().hex,
-                "X-Sign": sign,
-                "X-Timestamp": timestamp,
-            },
-        )
-        debug_dump(self.logger, self.config.debug_dump_all, f"GLM 刷新 access_token 请求头 account={account_index}", dict(request.header_items()))
+        headers = {
+            **self.get_browser_headers(),
+            "Authorization": f"Bearer {account.refresh_token}",
+            "X-Device-Id": uuid.uuid4().hex,
+            "X-Nonce": nonce,
+            "X-Request-Id": uuid.uuid4().hex,
+            "X-Sign": sign,
+            "X-Timestamp": timestamp,
+        }
+        debug_dump(self.logger, self.config.debug_dump_all, f"GLM 刷新 access_token 请求头 account={account_index}", headers)
         debug_dump(self.logger, self.config.debug_dump_all, f"GLM 刷新 access_token 请求体 account={account_index}", b"{}")
-        with urllib.request.urlopen(request, timeout=self.config.request_timeout) as response:
+        with urlopen(
+            self.config.refresh_url,
+            method="POST",
+            data=b"{}",
+            headers=headers,
+            timeout=self.config.request_timeout,
+            impersonate=self.config.glm_impersonate,
+        ) as response:
             payload = self.read_json_response(response)
         code = payload.get("code", payload.get("status"))
         result = payload.get("result") or {}
@@ -215,24 +216,26 @@ class GLMAccessTokenManager:
         timestamp, nonce, sign = build_sign()
         request_id = uuid.uuid4().hex
         device_id = uuid.uuid4().hex
-        request = urllib.request.Request(
-            self.config.guest_refresh_url,
-            data=b"",
-            method="POST",
-            headers={
-                **self.get_browser_headers(app_fr="default"),
-                "Content-Length": "0",
-                "Referer": "https://chatglm.cn/",
-                "X-Device-Id": device_id,
-                "X-Nonce": nonce,
-                "X-Request-Id": request_id,
-                "X-Sign": sign,
-                "X-Timestamp": timestamp,
-            },
-        )
-        debug_dump(self.logger, self.config.debug_dump_all, f"GLM 游客 token 请求头 account={account_index}", dict(request.header_items()))
+        headers = {
+            **self.get_browser_headers(app_fr="default"),
+            "Content-Length": "0",
+            "Referer": "https://chatglm.cn/",
+            "X-Device-Id": device_id,
+            "X-Nonce": nonce,
+            "X-Request-Id": request_id,
+            "X-Sign": sign,
+            "X-Timestamp": timestamp,
+        }
+        debug_dump(self.logger, self.config.debug_dump_all, f"GLM 游客 token 请求头 account={account_index}", headers)
         debug_dump(self.logger, self.config.debug_dump_all, f"GLM 游客 token 请求体 account={account_index}", b"")
-        with urllib.request.urlopen(request, timeout=self.config.request_timeout) as response:
+        with urlopen(
+            self.config.guest_refresh_url,
+            method="POST",
+            data=b"",
+            headers=headers,
+            timeout=self.config.request_timeout,
+            impersonate=self.config.glm_impersonate,
+        ) as response:
             payload = self.read_json_response(response)
         code = payload.get("code", payload.get("status"))
         result = payload.get("result") or {}
@@ -298,9 +301,7 @@ class GLMAccessTokenManager:
     def should_switch_account(self, exc: Exception) -> bool:
         if hasattr(exc, "status_code"):
             return True
-        if isinstance(exc, urllib.error.HTTPError):
-            return True
-        if isinstance(exc, urllib.error.URLError):
+        if isinstance(exc, (HTTPError, RequestError)):
             return True
         if isinstance(exc, TimeoutError):
             return True

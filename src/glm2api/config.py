@@ -149,6 +149,7 @@ class AppConfig:
     glm_image_assistant_id: str
     glm_image_model_name: str
     glm_user_agent: str
+    glm_impersonate: str
     glm_delete_conversation: bool
     glm_max_concurrency: int
     glm_queue_wait_timeout: int
@@ -260,6 +261,7 @@ def load_config(env_file: str = ".env") -> AppConfig:
                 "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0"
             ),
         ).strip(),
+        glm_impersonate=values.get("GLM_IMPERSONATE", "chrome").strip() or "chrome",
         glm_delete_conversation=parse_bool(values.get("GLM_DELETE_CONVERSATION"), True),
         glm_max_concurrency=glm_max_concurrency,
         glm_queue_wait_timeout=parse_int(values.get("GLM_QUEUE_WAIT_TIMEOUT_SECONDS"), 600),
